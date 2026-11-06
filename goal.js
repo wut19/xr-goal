@@ -1,20 +1,35 @@
 /*
- * goal.js - random per-episode goals for the "4 objects -> 6 compartments" task.
- * Plain ES5 so it runs in old mobile browsers; also usable from Node as a CLI.
+ * goal.js - goals, train/test split and collection schedules for the
+ * "4 objects -> 6 compartments" placing task. Plain ES5 so it runs in old
+ * mobile browsers; also a Node module and CLI.
  *
- * A goal puts each of the 4 objects into a different compartment and gives a
- * random placement order (6*5*4*3 assignments x 4! orders, all equally likely).
- * The goal depends only on (batch, episode): refreshing the page never re-rolls
- * it, and the goal of any recorded episode can be recomputed later:
+ * Goal: each object goes into a different compartment, 6*5*4*3 = 360 goals.
+ * Goal code: the compartment ids of 充电器, 耳机盒, 骰子, 电池, in that order.
+ *   "3152" = 充电器 -> 3, 耳机盒 -> 1, 骰子 -> 5, 电池 -> 2.
  *
- *   node goal.js --batch K7Q2 --from 1 --to 200 > goals_K7Q2.csv
+ * Split: the 60 TEST_GOALS are held out, the other 300 goals are train goals.
+ * Every object-compartment pair occurs in exactly 10 test goals.
  *
- * Editing OBJECTS or HOLES changes the goals of existing batches, so export the
- * CSVs you need before changing them.
+ * Schedules: train episodes 1..1800 form 6 rounds of 300, test episodes 1..180
+ * form 3 rounds of 60. Each round is a random permutation of that split's goals,
+ * so a full schedule gives every train goal 6 demonstrations and every test goal
+ * 3, and every completed round adds one per goal. Each episode also gets a
+ * random placement order, which is not part of the goal.
+ *
+ *   node goal.js split          > plan/split.csv
+ *   node goal.js schedule train > plan/train_schedule.csv
+ *   node goal.js schedule test  > plan/test_schedule.csv
+ *
+ * The plan depends on the OBJECTS order, HOLES ids, TEST_GOALS, REPEATS and
+ * SCHEDULE_SEED. Don't change them after collection has started.
  */
 var GoalGen = (function () {
   'use strict';
 
+  // Bump together with "goal.js?v=" in index.html when the API changes.
+  var VERSION = 3;
+
+  // The order of OBJECTS defines the digits of a goal code.
   var OBJECTS = [
     { id: 'charger', name: '充电器', img: 'img/charger.jpg' },
     { id: 'earbuds', name: '耳机盒', img: 'img/earbuds.jpg' },
@@ -22,7 +37,8 @@ var GoalGen = (function () {
     { id: 'battery', name: '电池', img: 'img/battery.jpg' }
   ];
 
-  // x, y: compartment centre on img/container.jpg, in % of image width / height.
+  // id: digit used in goal codes. x, y: compartment centre on img/container.jpg,
+  // in % of image width / height.
   var HOLES = [
     { id: 1, name: '左上格', x: 22.2, y: 19.3 },
     { id: 2, name: '中上格', x: 56.5, y: 18.6 },
@@ -32,9 +48,21 @@ var GoalGen = (function () {
     { id: 6, name: '左下大格', x: 39.5, y: 67.6 }
   ];
 
-  var BATCH_RE = /^[A-Z0-9_-]{1,20}$/;
-  var MIN_EPISODE = 1;
-  var MAX_EPISODE = 99999;
+  // Held-out goals, drawn with `node goal.js new-split xr_icl-split-v1`.
+  var TEST_GOALS = [
+    '1356', '1426', '1452', '1465', '1543', '1546', '1562', '1625', '1632', '1643',
+    '2146', '2315', '2341', '2356', '2361', '2416', '2514', '2536', '2641', '2654',
+    '3164', '3215', '3254', '3256', '3265', '3412', '3456', '3461', '3514', '3624',
+    '4125', '4251', '4253', '4263', '4315', '4326', '4532', '4613', '4632', '4635',
+    '5132', '5134', '5143', '5163', '5234', '5342', '5361', '5412', '5462', '5623',
+    '6124', '6134', '6143', '6215', '6245', '6321', '6451', '6521', '6523', '6531'
+  ];
+
+  var TEST_SIZE = 60;
+  var REPEATS = { train: 6, test: 3 }; // demonstrations per goal
+  var SCHEDULE_SEED = 'xr_icl-schedule-v1';
+  // Seed prefix per split. The train prefix predates the test schedule; keep it.
+  var SEEDS = { train: SCHEDULE_SEED, test: SCHEDULE_SEED + '|test' };
 
   // Math.imul is ES2015; fall back to a polyfill on old browsers.
   var imul = Math.imul || function (a, b) {
@@ -78,6 +106,13 @@ var GoalGen = (function () {
     };
   }
 
+  function prng(seed) {
+    var s = cyrb128(seed);
+    var rand = sfc32(s[0], s[1], s[2], s[3]);
+    for (var i = 0; i < 12; i++) rand(); // warm-up
+    return rand;
+  }
+
   function range(n) {
     var a = [];
     for (var i = 0; i < n; i++) a.push(i);
@@ -95,89 +130,218 @@ var GoalGen = (function () {
     return arr;
   }
 
-  function normBatch(s) {
-    return String(s == null ? '' : s).trim().toUpperCase();
-  }
+  var HOLE_INDEX = {}; // hole id (as string) -> index in HOLES
+  for (var hi = 0; hi < HOLES.length; hi++) HOLE_INDEX[HOLES[hi].id] = hi;
 
-  function isValidBatch(s) {
-    return typeof s === 'string' && BATCH_RE.test(s);
-  }
-
-  function isValidEpisode(n) {
-    return typeof n === 'number' && n % 1 === 0 && n >= MIN_EPISODE && n <= MAX_EPISODE;
-  }
-
-  function makeGoal(batch, episode) {
-    batch = normBatch(batch);
-    if (!isValidBatch(batch)) throw new Error('invalid batch: ' + batch);
-    if (!isValidEpisode(episode)) throw new Error('invalid episode: ' + episode);
-
-    var seed = cyrb128(batch + '|' + episode);
-    var rand = sfc32(seed[0], seed[1], seed[2], seed[3]);
-    for (var i = 0; i < 12; i++) rand(); // warm-up
-
-    var holeOf = shuffle(range(HOLES.length), rand); // holeOf[k]: hole index of object k
-    var order = shuffle(range(OBJECTS.length), rand); // object indices in placement order
-
-    var steps = [];
-    for (var s = 0; s < order.length; s++) {
-      steps.push({ step: s + 1, object: OBJECTS[order[s]], hole: HOLES[holeOf[order[s]]] });
+  // All goal codes in lexicographic order.
+  function allGoalCodes() {
+    var out = [];
+    function rec(prefix, used) {
+      if (prefix.length === OBJECTS.length) {
+        out.push(prefix);
+        return;
+      }
+      for (var h = 0; h < HOLES.length; h++) {
+        if (!used[h]) {
+          used[h] = true;
+          rec(prefix + HOLES[h].id, used);
+          used[h] = false;
+        }
+      }
     }
-    var emptyHoles = [];
-    for (var h = OBJECTS.length; h < holeOf.length; h++) emptyHoles.push(HOLES[holeOf[h]]);
-    emptyHoles.sort(function (a, b) { return a.id - b.id; });
-
-    return { batch: batch, episode: episode, steps: steps, emptyHoles: emptyHoles };
+    rec('', []);
+    return out;
   }
 
-  function csvHeader() {
-    var cols = ['batch', 'episode'];
+  var ALL_GOALS = allGoalCodes();
+  var IS_GOAL = {};
+  for (var gi = 0; gi < ALL_GOALS.length; gi++) IS_GOAL[ALL_GOALS[gi]] = true;
+
+  var IS_TEST = {};
+  for (var ti = 0; ti < TEST_GOALS.length; ti++) {
+    if (!IS_GOAL[TEST_GOALS[ti]] || IS_TEST[TEST_GOALS[ti]]) {
+      throw new Error('goal.js: invalid or duplicate test goal ' + TEST_GOALS[ti]);
+    }
+    IS_TEST[TEST_GOALS[ti]] = true;
+  }
+
+  // Goals of each split, in lexicographic order.
+  var GOALS = {
+    train: ALL_GOALS.filter(function (c) { return !IS_TEST[c]; }),
+    test: ALL_GOALS.filter(function (c) { return IS_TEST[c]; })
+  };
+
+  function isValidSplit(split) {
+    return split === 'train' || split === 'test';
+  }
+
+  function totalEpisodes(split) {
+    return GOALS[split].length * REPEATS[split];
+  }
+
+  var schedules = {};
+
+  // Goal code of every episode of a split (index 0 = episode 1).
+  function getSchedule(split) {
+    if (schedules[split]) return schedules[split];
+    var rand = prng(SEEDS[split] + '|rounds');
+    var out = [], last = null;
+    for (var r = 0; r < REPEATS[split]; r++) {
+      var perm = shuffle(GOALS[split].slice(), rand);
+      if (perm.length > 1 && perm[0] === last) { // never the same goal twice in a row
+        var k = 1 + Math.floor(rand() * (perm.length - 1));
+        var t = perm[0];
+        perm[0] = perm[k];
+        perm[k] = t;
+      }
+      out = out.concat(perm);
+      last = perm[perm.length - 1];
+    }
+    schedules[split] = out;
+    return out;
+  }
+
+  function isValidEpisode(split, n) {
+    return isValidSplit(split) && typeof n === 'number' && n % 1 === 0 &&
+      n >= 1 && n <= totalEpisodes(split);
+  }
+
+  function getEpisode(split, n) {
+    if (!isValidEpisode(split, n)) throw new Error('invalid episode: ' + split + ' ' + n);
+    var code = getSchedule(split)[n - 1];
+    var roundSize = GOALS[split].length;
+    var order = shuffle(range(OBJECTS.length), prng(SEEDS[split] + '|order|' + n));
+    var steps = [], used = {};
+    for (var s = 0; s < order.length; s++) {
+      var hole = HOLES[HOLE_INDEX[code.charAt(order[s])]];
+      steps.push({ step: s + 1, object: OBJECTS[order[s]], hole: hole });
+      used[hole.id] = true;
+    }
+    return {
+      split: split,
+      episode: n,
+      round: Math.floor((n - 1) / roundSize) + 1,
+      indexInRound: (n - 1) % roundSize + 1,
+      code: code,
+      steps: steps,
+      emptyHoles: HOLES.filter(function (h) { return !used[h.id]; })
+    };
+  }
+
+  // Random split in which every object-compartment pair occurs in exactly
+  // nTest / HOLES.length test goals. Used once to draw TEST_GOALS: start from a
+  // random subset, then keep random test/train swaps that don't add imbalance.
+  function newSplit(seed, nTest) {
+    var nObj = OBJECTS.length, nHole = HOLES.length;
+    if (nTest % nHole !== 0) throw new Error('nTest must be a multiple of ' + nHole);
+    var target = nTest / nHole;
+    var rand = prng(seed + '|split');
+    var idx = shuffle(range(ALL_GOALS.length), rand);
+    var test = idx.slice(0, nTest), rest = idx.slice(nTest);
+    var cnt = [], i;
+    for (i = 0; i < nObj * nHole; i++) cnt.push(0);
+
+    function add(code, d) {
+      for (var o = 0; o < nObj; o++) cnt[o * nHole + HOLE_INDEX[code.charAt(o)]] += d;
+    }
+    function cost() {
+      var s = 0;
+      for (var c = 0; c < cnt.length; c++) s += (cnt[c] - target) * (cnt[c] - target);
+      return s;
+    }
+
+    for (i = 0; i < test.length; i++) add(ALL_GOALS[test[i]], 1);
+    var cur = cost();
+    for (var it = 0; cur > 0; it++) {
+      if (it > 1000000) throw new Error('newSplit did not converge');
+      var a = Math.floor(rand() * test.length), b = Math.floor(rand() * rest.length);
+      add(ALL_GOALS[test[a]], -1);
+      add(ALL_GOALS[rest[b]], 1);
+      var next = cost();
+      if (next <= cur) {
+        var t = test[a];
+        test[a] = rest[b];
+        rest[b] = t;
+        cur = next;
+      } else {
+        add(ALL_GOALS[rest[b]], -1);
+        add(ALL_GOALS[test[a]], 1);
+      }
+    }
+    return test.map(function (k) { return ALL_GOALS[k]; }).sort();
+  }
+
+  function splitCsv() {
+    var lines = ['goal_code,split,' + OBJECTS.map(function (o) { return o.id + '_hole'; }).join(',')];
+    for (var i = 0; i < ALL_GOALS.length; i++) {
+      var c = ALL_GOALS[i];
+      lines.push(c + ',' + (IS_TEST[c] ? 'test' : 'train') + ',' + c.split('').join(','));
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  function scheduleCsv(split) {
+    if (!isValidSplit(split)) throw new Error('invalid split: ' + split);
+    var cols = ['episode', 'round', 'goal_code'];
     for (var i = 1; i <= OBJECTS.length; i++) cols.push('step' + i + '_object', 'step' + i + '_hole');
-    return cols.join(',');
+    var lines = [cols.join(',')];
+    for (var n = 1; n <= totalEpisodes(split); n++) {
+      var e = getEpisode(split, n), row = [e.episode, e.round, e.code];
+      for (var s = 0; s < e.steps.length; s++) row.push(e.steps[s].object.id, e.steps[s].hole.id);
+      lines.push(row.join(','));
+    }
+    return lines.join('\n') + '\n';
   }
 
-  function csvRow(goal) {
-    var cols = [goal.batch, goal.episode];
-    for (var i = 0; i < goal.steps.length; i++) cols.push(goal.steps[i].object.id, goal.steps[i].hole.id);
-    return cols.join(',');
+  function splitInfo(split) {
+    return {
+      goals: GOALS[split].length,
+      repeats: REPEATS[split],
+      roundSize: GOALS[split].length,
+      total: totalEpisodes(split)
+    };
   }
 
   return {
+    VERSION: VERSION,
     OBJECTS: OBJECTS,
     HOLES: HOLES,
-    MIN_EPISODE: MIN_EPISODE,
-    MAX_EPISODE: MAX_EPISODE,
-    normBatch: normBatch,
-    isValidBatch: isValidBatch,
+    ALL_GOALS: ALL_GOALS.slice(),
+    TRAIN_GOALS: GOALS.train.slice(),
+    TEST_GOALS: GOALS.test.slice(),
+    TEST_SIZE: TEST_SIZE,
+    SPLITS: { train: splitInfo('train'), test: splitInfo('test') },
+    isValidSplit: isValidSplit,
     isValidEpisode: isValidEpisode,
-    makeGoal: makeGoal,
-    csvHeader: csvHeader,
-    csvRow: csvRow
+    getEpisode: getEpisode,
+    getSchedule: function (split) { return getSchedule(split).slice(); },
+    newSplit: newSplit,
+    splitCsv: splitCsv,
+    scheduleCsv: scheduleCsv
   };
 })();
 
-// Node: export, and act as a CSV exporter when run directly.
+// Node: export, and act as a CLI when run directly.
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = GoalGen;
   if (typeof require === 'function' && require.main === module) {
     (function (argv) {
-      function arg(name, def) {
-        var i = argv.indexOf('--' + name);
-        return i >= 0 && i + 1 < argv.length ? argv[i + 1] : def;
-      }
-      var batch = GoalGen.normBatch(arg('batch', ''));
-      var from = Number(arg('from', '1'));
-      var to = Number(arg('to', '200'));
-      if (!GoalGen.isValidBatch(batch) || !GoalGen.isValidEpisode(from) ||
-          !GoalGen.isValidEpisode(to) || from > to) {
+      if (argv[0] === 'split' && argv.length === 1) {
+        process.stdout.write(GoalGen.splitCsv());
+      } else if (argv[0] === 'schedule' && argv.length === 2 && GoalGen.isValidSplit(argv[1])) {
+        process.stdout.write(GoalGen.scheduleCsv(argv[1]));
+      } else if (argv[0] === 'new-split' && argv.length === 2 && argv[1]) {
+        process.stdout.write(JSON.stringify(GoalGen.newSplit(argv[1], GoalGen.TEST_SIZE)) + '\n');
+      } else {
         process.stderr.write(
-          'usage: node goal.js --batch CODE [--from 1] [--to 200] > goals.csv\n' +
-          '  CODE: 1-20 characters from A-Z 0-9 _ - (case-insensitive)\n');
+          'usage:\n' +
+          '  node goal.js split          > plan/split.csv\n' +
+          '  node goal.js schedule train > plan/train_schedule.csv\n' +
+          '  node goal.js schedule test  > plan/test_schedule.csv\n' +
+          '  node goal.js new-split SEED   print a new balanced list of test goals\n' +
+          '                                (only before collection starts)\n');
         process.exit(2);
       }
-      var lines = [GoalGen.csvHeader()];
-      for (var e = from; e <= to; e++) lines.push(GoalGen.csvRow(GoalGen.makeGoal(batch, e)));
-      process.stdout.write(lines.join('\n') + '\n');
     })(process.argv.slice(2));
   }
 }

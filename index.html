@@ -6,7 +6,7 @@
 <meta name="format-detection" content="telephone=no">
 <meta name="theme-color" content="#f2f3f5">
 <link rel="icon" href="data:,">
-<title>放置任务 · 随机目标</title>
+<title>放置任务</title>
 <style>
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -18,6 +18,7 @@
       "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
     -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
   }
+  body.test { background: #fff4e6; }
   button {
     font: inherit; color: inherit; margin: 0; border: 0; cursor: pointer;
     -webkit-appearance: none; appearance: none;
@@ -28,11 +29,17 @@
   }
 
   .top { display: flex; align-items: center; justify-content: space-between; }
-  .ep { font-size: 20px; font-weight: 600; }
+  .ep { font-size: 20px; font-weight: 600; white-space: nowrap; }
   .ep b { display: inline-block; margin: 0 6px; font-size: 34px; line-height: 1.1; color: #111; }
-  .side { font-size: 14px; color: #57606a; white-space: nowrap; }
-  .side b { color: #1f2328; letter-spacing: 1px; }
-  .gear { margin-left: 8px; padding: 6px 12px; border-radius: 8px; background: #e1e4e8; font-size: 14px; }
+  .ep small { margin-left: 6px; font-size: 15px; font-weight: 400; color: #6e7781; }
+  .gear { padding: 6px 12px; border-radius: 8px; background: #e1e4e8; font-size: 14px; }
+  .meta { margin: 2px 0 0; font-size: 14px; color: #57606a; }
+  .meta b { color: #1f2328; letter-spacing: 1px; }
+  .tag {
+    display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px;
+    background: #dafbe1; color: #1a7f37; font-weight: 600;
+  }
+  .test .tag { background: #e8590c; color: #fff; }
   .hint { margin: 6px 0 8px; font-size: 15px; color: #3d434b; }
 
   .diagram { position: relative; border-radius: 12px; overflow: hidden; background: #d0d3d8; }
@@ -81,10 +88,9 @@
 
   .empty { margin: 4px 2px; font-size: 14px; color: #57606a; }
   .note { margin: 4px 2px; font-size: 13px; color: #8c959f; }
-  .warn {
-    display: none; margin: 8px 0; padding: 8px 10px; border-radius: 8px;
-    background: #fff1e5; color: #9a4b00; font-size: 14px;
-  }
+  .warn, .done { display: none; margin: 8px 0; padding: 8px 10px; border-radius: 8px; font-size: 14px; }
+  .warn { background: #fff1e5; color: #9a4b00; }
+  .done { background: #dafbe1; color: #1a7f37; }
   .nojs { margin: 16px; padding: 12px; border-radius: 8px; background: #fff1e5; color: #9a4b00; }
 
   .bar {
@@ -106,15 +112,19 @@
   .modal.show { display: block; }
   .sheet { max-width: 420px; margin: 0 auto; padding: 16px; border-radius: 14px; background: #fff; }
   .sheet h2 { margin: 0 0 12px; font-size: 18px; }
+  .lead { margin: 0 0 12px; font-size: 15px; }
   .field { display: block; margin-bottom: 10px; font-size: 14px; color: #57606a; }
   .field input {
     display: block; width: 100%; height: 44px; margin-top: 4px; padding: 0 10px;
     border: 1px solid #c9ced6; border-radius: 10px; background: #fff; color: #1f2328;
     font: inherit; font-size: 18px; -webkit-appearance: none; appearance: none;
   }
-  .link { margin: 0 0 14px; padding: 4px 0; background: none; color: #1f6feb; font-size: 15px; }
   .err { min-height: 1.4em; margin: 0 0 6px; color: #d1242f; font-size: 14px; }
-  .tip { margin: 0 0 14px; color: #6e7781; font-size: 13px; }
+  .tip { margin: 0 0 6px; color: #6e7781; font-size: 13px; }
+  .ranges { margin: 0 0 14px; padding: 0; list-style: none; }
+  .ranges li { display: inline-block; width: 50%; }
+  .ranges button { padding: 4px 0; background: none; color: #1f6feb; font-size: 14px; }
+  .switch { display: block; margin: 16px 0 2px; text-align: center; color: #1f6feb; font-size: 14px; text-decoration: none; }
 
   @-webkit-keyframes pop { 0% { -webkit-transform: scale(1.5); color: #1f6feb; } 100% { -webkit-transform: scale(1); } }
   @keyframes pop { 0% { transform: scale(1.5); color: #1f6feb; } 100% { transform: scale(1); } }
@@ -130,10 +140,11 @@
 <body>
 <div class="page" id="page">
   <div class="top">
-    <div class="ep">第<b id="epNum">-</b>条</div>
-    <div class="side">批次 <b id="batchCode">-</b><button type="button" class="gear" id="btnSettings">设置</button></div>
+    <div class="ep">第<b id="epNum">-</b>条<small>/ <span id="epTotal">-</span></small></div>
+    <button type="button" class="gear" id="btnSettings">设置</button>
   </div>
-  <p class="hint">按 <b>1→2→3→4</b> 的顺序，把物体放进对应格子。</p>
+  <p class="meta"><span class="tag" id="tag">-</span>第 <span id="round">-</span> 轮 <span id="inRound">-</span> · 目标编号 <b id="code">-</b></p>
+  <p class="hint">按 <b>1→2→3→4</b> 的顺序放进对应格子。</p>
 
   <div class="diagram">
     <img class="box" src="img/container.jpg" alt="容器俯视图">
@@ -142,8 +153,9 @@
 
   <ol class="steps" id="steps"></ol>
   <p class="empty" id="empty"></p>
-  <p class="warn" id="saveWarn">这个浏览器无法保存进度，刷新后批次号和条数会丢失。请换用手机自带浏览器，或在「设置」里手动填回。</p>
-  <p class="note">每条做完后点「下一条」。目标只由批次号和条数决定，刷新页面不会改变。</p>
+  <p class="done" id="done"></p>
+  <p class="warn" id="saveWarn">这个浏览器无法保存进度，刷新后会回到第 1 条。请换用手机自带浏览器，或在「设置」里手动填回条数。</p>
+  <p class="note" id="note"></p>
 </div>
 
 <div class="bar">
@@ -155,56 +167,50 @@
 
 <div class="modal" id="modal">
   <div class="sheet">
-    <h2>设置</h2>
-    <label class="field">批次号
-      <input id="inBatch" type="text" maxlength="20" autocomplete="off" autocapitalize="characters"
-             autocorrect="off" spellcheck="false">
-    </label>
-    <button type="button" class="link" id="btnNewBatch">随机生成新批次（从第 1 条开始）</button>
-    <label class="field">当前条数
-      <input id="inEp" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="99999">
+    <h2 id="setTitle">设置</h2>
+    <p class="lead" id="firstTip">第一次打开，请确认从第几条开始。一个人采集就从第 1 条开始；多人同时采集时，每人从自己负责范围的第一条开始。</p>
+    <label class="field">当前条数（1–<span id="maxEp">-</span>）
+      <input id="inEp" type="number" inputmode="numeric" pattern="[0-9]*" min="1">
     </label>
     <p class="err" id="err"></p>
-    <p class="tip">同一个批次号和条数永远对应同一个目标。多台手机同时采集时，每台用不同的批次号，并把批次号写进采集记录。</p>
+    <p class="tip" id="planTip"></p>
+    <ul class="ranges" id="ranges"></ul>
     <div class="row2">
       <button type="button" class="btn sec" id="btnCancel">取消</button>
       <button type="button" class="btn pri" id="btnSave">保存</button>
     </div>
+    <a class="switch" id="switchLink" href="./">-</a>
   </div>
 </div>
 
 <noscript><p class="nojs">请开启浏览器的 JavaScript 后刷新页面。</p></noscript>
-<script src="goal.js"></script>
+<script src="goal.js?v=3"></script>
 <script>
 (function () {
   'use strict';
   var G = window.GoalGen;
-  var KEY = 'xr_icl_goal_v1';
 
   function $(id) { return document.getElementById(id); }
 
-  if (!G) {
+  if (!G || G.VERSION !== 3) {
     $('steps').innerHTML = '<li class="row">页面没有加载完整，请刷新。</li>';
     return;
   }
 
-  function randomBatch() {
-    var abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    var c = window.crypto || window.msCrypto;
-    var out = '', r, i;
-    for (i = 0; i < 4; i++) {
-      r = (c && c.getRandomValues) ? c.getRandomValues(new Uint32Array(1))[0] / 4294967296 : Math.random();
-      out += abc.charAt(Math.floor(r * abc.length));
-    }
-    return out;
-  }
-
+  // Split comes from the URL: ./ = train, ./?split=test = test.
+  var SPLIT = /(^|&)split=test(&|$)/.test(window.location.search.slice(1)) ? 'test' : 'train';
+  var IS_TEST = SPLIT === 'test';
+  var KIND = IS_TEST ? '测试' : '训练';
+  var INFO = G.SPLITS[SPLIT];
+  var TOTAL = INFO.total;
+  var ROUND = INFO.roundSize;
+  var KEY = IS_TEST ? 'xr_icl_goal_v2_test' : 'xr_icl_goal_v2'; // progress is kept per split
   var canSave = true;
 
   function load() {
     try {
       var s = JSON.parse(window.localStorage.getItem(KEY) || 'null');
-      if (s && G.isValidBatch(s.batch) && G.isValidEpisode(s.ep)) return { batch: s.batch, ep: s.ep };
+      if (s && G.isValidEpisode(SPLIT, s.ep)) return { ep: s.ep };
     } catch (e) { /* storage unavailable or corrupt: start fresh */ }
     return null;
   }
@@ -218,11 +224,36 @@
     }
   }
 
-  var state = load() || { batch: randomBatch(), ep: G.MIN_EPISODE };
+  var saved = load();
+  var state = saved || { ep: 1 };
   save();
 
+  document.title = '放置任务 · ' + KIND + '目标';
+  if (IS_TEST) {
+    document.body.className = 'test';
+    var themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.setAttribute('content', '#fff4e6');
+  }
+  $('tag').textContent = KIND + '集';
+  $('epTotal').textContent = String(TOTAL);
+  $('maxEp').textContent = String(TOTAL);
+  $('note').textContent = (IS_TEST ? '这是测试集，录制时请标明是测试数据。' : '') +
+    '每条做好后再点「下一条」。做失败了就重做本条，不要跳过。';
+  $('done').textContent = '这是最后一条。全部做完后，每个' + KIND + '目标正好有 ' + INFO.repeats + ' 条示范。';
+  $('planTip').textContent = '共 ' + INFO.goals + ' 个' + KIND + '目标，每个做 ' + INFO.repeats + ' 次，分 ' +
+    INFO.repeats + ' 轮，每轮把所有' + KIND + '目标各做一次。多人同时采集时，每人负责不同的范围，' +
+    '例如按轮分（点一下填入起始条数）：';
+  var ranges = [];
+  for (var r = 1; r <= INFO.repeats; r++) {
+    ranges.push('<li><button type="button" data-ep="' + ((r - 1) * ROUND + 1) + '">第 ' + r + ' 轮：' +
+      ((r - 1) * ROUND + 1) + '–' + (r * ROUND) + '</button></li>');
+  }
+  $('ranges').innerHTML = ranges.join('');
+  $('switchLink').href = window.location.pathname + (IS_TEST ? '' : '?split=test');
+  $('switchLink').textContent = IS_TEST ? '切换到训练集' : '切换到测试集（进度分开记录）';
+
   function render(animate) {
-    var g = G.makeGoal(state.batch, state.ep);
+    var g = G.getEpisode(SPLIT, state.ep);
     var used = {}, mk = [], rows = [], empty = [];
     var i, st, h, p;
 
@@ -245,17 +276,18 @@
         mk.push('<div class="mk off" style="left:' + h.x + '%;top:' + h.y + '%"><span>空</span></div>');
       }
     }
-    for (i = 0; i < g.emptyHoles.length; i++) {
-      empty.push(g.emptyHoles[i].name);
-    }
+    for (i = 0; i < g.emptyHoles.length; i++) empty.push(g.emptyHoles[i].name);
 
-    $('epNum').textContent = String(state.ep);
-    $('batchCode').textContent = state.batch;
+    $('epNum').textContent = String(g.episode);
+    $('round').textContent = String(g.round);
+    $('inRound').textContent = g.indexInRound + '/' + ROUND;
+    $('code').textContent = g.code;
     $('markers').innerHTML = mk.join('');
     $('steps').innerHTML = rows.join('');
     $('empty').textContent = '标「空」的格子不放东西：' + empty.join('、');
-    $('btnPrev').disabled = state.ep <= G.MIN_EPISODE;
-    $('btnNext').disabled = state.ep >= G.MAX_EPISODE;
+    $('done').style.display = state.ep === TOTAL ? 'block' : 'none';
+    $('btnPrev').disabled = state.ep <= 1;
+    $('btnNext').disabled = state.ep >= TOTAL;
     $('saveWarn').style.display = canSave ? 'none' : 'block';
 
     if (animate) {
@@ -270,7 +302,7 @@
 
   function go(delta) {
     var n = state.ep + delta;
-    if (busy || !G.isValidEpisode(n)) return;
+    if (busy || !G.isValidEpisode(SPLIT, n)) return;
     busy = true;
     setTimeout(function () { busy = false; }, 400);
     state.ep = n;
@@ -284,8 +316,9 @@
 
   var modal = $('modal');
 
-  function openSettings() {
-    $('inBatch').value = state.batch;
+  function openSettings(first) {
+    $('setTitle').textContent = (IS_TEST ? '测试集：' : '') + (first ? '从第几条开始？' : '设置');
+    $('firstTip').style.display = first ? 'block' : 'none';
     $('inEp').value = String(state.ep);
     $('err').textContent = '';
     modal.className = 'modal show';
@@ -293,37 +326,36 @@
 
   function closeSettings() { modal.className = 'modal'; }
 
-  $('btnSettings').onclick = openSettings;
-  $('btnCancel').onclick = closeSettings;
-  modal.onclick = function (ev) { if (ev.target === modal) closeSettings(); };
-
-  $('btnNewBatch').onclick = function () {
-    $('inBatch').value = randomBatch();
-    $('inEp').value = String(G.MIN_EPISODE);
-    $('err').textContent = '';
-  };
-
-  $('btnSave').onclick = function () {
-    var b = G.normBatch($('inBatch').value);
+  function saveSettings() {
     var raw = String($('inEp').value).trim();
     var e = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
-    if (!G.isValidBatch(b)) {
-      $('err').textContent = '批次号只能包含字母、数字、- 和 _，最多 20 位。';
+    if (!G.isValidEpisode(SPLIT, e)) {
+      $('err').textContent = '条数必须是 1 到 ' + TOTAL + ' 之间的整数。';
       return;
     }
-    if (!G.isValidEpisode(e)) {
-      $('err').textContent = '条数必须是 ' + G.MIN_EPISODE + ' 到 ' + G.MAX_EPISODE + ' 之间的整数。';
-      return;
-    }
-    var changed = b !== state.batch || e !== state.ep;
-    state.batch = b;
+    var changed = e !== state.ep;
     state.ep = e;
     save();
     closeSettings();
     render(changed);
+  }
+
+  $('btnSettings').onclick = function () { openSettings(false); };
+  $('btnCancel').onclick = closeSettings;
+  $('btnSave').onclick = saveSettings;
+  $('inEp').onkeydown = function (ev) { if (ev.keyCode === 13) saveSettings(); };
+  modal.onclick = function (ev) { if (ev.target === modal) closeSettings(); };
+  $('ranges').onclick = function (ev) {
+    var t = ev.target || ev.srcElement;
+    var v = t && t.getAttribute ? t.getAttribute('data-ep') : null;
+    if (v) {
+      $('inEp').value = v;
+      $('err').textContent = '';
+    }
   };
 
   render(false);
+  if (!saved) openSettings(true);
 })();
 </script>
 </body>
